@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="referrer" content="no-referrer">
+<title>Wallet Balance</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1b1b1a; --muted: #6b6b66;
+    --line: #e3e3de; --accent: #e8870e; --eth: #5b6ee1; --danger: #c0392b; --ok: #2e8b57;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214; --card: #1c1c20; --text: #ececea; --muted: #9a9a96;
+      --line: #2c2c31; --accent: #f5a13a; --eth: #8c9bff; --danger: #ef6b5b; --ok: #5cc98a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121214; --card: #1c1c20; --text: #ececea; --muted: #9a9a96;
+    --line: #2c2c31; --accent: #f5a13a; --eth: #8c9bff; --danger: #ef6b5b; --ok: #5cc98a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 8px 0 4px; letter-spacing: .02em; }
+  .total { font-size: clamp(26px, 9vw, 40px); overflow-wrap: anywhere; font-weight: 700; font-variant-numeric: tabular-nums; margin: 0; }
+  .sub { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .spread { justify-content: space-between; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 12px 0; }
+  .acct-name { font-weight: 600; }
+  .tag { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; color: #fff; }
+  .tag.btc { background: var(--accent); } .tag.eth { background: var(--eth); }
+  .amt { font-variant-numeric: tabular-nums; text-align: right; }
+  .amt b { display: block; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+  .err { color: var(--danger); font-size: 13px; }
+  button, select, input, textarea {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.link { background: none; border: none; color: var(--muted); padding: 4px; font-size: 13px; }
+  textarea, input, select { width: 100%; }
+  textarea { min-height: 72px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  .note { font-size: 12px; color: var(--muted); }
+  details summary { cursor: pointer; font-weight: 600; }
+  .grow { flex: 1; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TOTAL</h1>
+  <p class="total" id="total">—</p>
+  <div class="sub" id="totalSub"></div>
+  <div class="row spread" style="margin-top:12px">
+    <select id="fiat" style="width:auto">
+      <option value="usd">USD</option><option value="cny">CNY</option>
+      <option value="eur">EUR</option><option value="hkd">HKD</option>
+    </select>
+    <button class="primary grow" id="refresh">Refresh</button>
+  </div>
+  <div class="sub" id="status" style="margin-top:8px"></div>
+
+  <div id="accounts"></div>
+
+  <details class="card" id="addBox">
+    <summary>Add account</summary>
+    <label for="kind">Coin</label>
+    <select id="kind">
+      <option value="btc">Bitcoin (xpub / ypub / zpub)</option>
+      <option value="eth">Ethereum (0x address)</option>
+    </select>
+    <label for="name">Name</label>
+    <input id="name" placeholder="e.g. Ledger Bitcoin 1" autocomplete="off">
+    <label for="key" id="keyLabel">Extended public key</label>
+    <textarea id="key" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div id="btcOpts">
+      <label for="script">Address type (Ledger shows this on the same screen)</label>
+      <select id="script">
+        <option value="p2wpkh">Native SegWit (bc1q…)</option>
+        <option value="p2sh-p2wpkh">Nested SegWit (3…)</option>
+        <option value="p2pkh">Legacy (1…)</option>
+      </select>
+    </div>
+    <div class="err" id="addErr"></div>
+    <button class="primary" id="add" style="width:100%;margin-top:12px">Add</button>
+    <p class="note">Public keys only. Never enter your 24-word recovery phrase here or anywhere else.</p>
+  </details>
+
+  <p class="note">
+    Accounts are saved only in this browser. Balances come from mempool.space or blockstream.info (BTC) and
+    publicnode.com (ETH); prices from CoinGecko. Those services see the addresses being looked up.
+    ETH tokens (USDT etc.) are not counted yet.
+  </p>
+</main>
+
+<script type="module">
+import { HDKey } from 'https://cdn.jsdelivr.net/npm/@scure/bip32@1.4.0/+esm';
+import { bech32, createBase58check } from 'https://cdn.jsdelivr.net/npm/@scure/base@1.1.6/+esm';
+import { sha256 } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.4.0/sha256/+esm';
+import { ripemd160 } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.4.0/ripemd160/+esm';
+
+const b58c = createBase58check(sha256);
+const STORE = 'wallet-balance-v1';
+const GAP_LIMIT = 20;
+const VERSIONS = { xpub: 0x0488b21e, ypub: 0x049d7cb2, zpub: 0x04b24746 };
+
+const $ = (id) => document.getElementById(id);
+const state = { accounts: load(), prices: null, results: {} };
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORE)) || []; } catch { return []; }
+}
+function save() {
+  try { localStorage.setItem(STORE, JSON.stringify(state.accounts)); } catch {}
+}
+
+// ---- Bitcoin ----
+const hash160 = (b) => ripemd160(sha256(b));
+
+// Normalise ypub/zpub to xpub version bytes so HDKey can parse any of them.
+function parseExtendedKey(str) {
+  str = str.trim();
+  const prefix = str.slice(0, 4);
+  if (!(prefix in VERSIONS)) throw new Error('Key must start with xpub, ypub or zpub');
+  const raw = b58c.decode(str);
+  if (raw.length !== 78) throw new Error('Key has the wrong length');
+  const bytes = raw.slice();
+  new DataView(bytes.buffer).setUint32(0, VERSIONS.xpub);
+  return HDKey.fromExtendedKey(b58c.encode(bytes));
+}
+
+function toAddress(pub, script) {
+  const h = hash160(pub);
+  if (script === 'p2wpkh') return bech32.encode('bc', [0, ...bech32.toWords(h)]);
+  if (script === 'p2sh-p2wpkh') {
+    const redeem = new Uint8Array([0x00, 0x14, ...h]);
+    return b58c.encode(new Uint8Array([0x05, ...hash160(redeem)]));
+  }
+  return b58c.encode(new Uint8Array([0x00, ...h]));
+}
+
+const sleep = (ms) => new Promise((s) => setTimeout(s, ms));
+
+// Rate-limit replies often lack CORS headers and surface as a network error, so retry those too.
+async function fetchJson(url, opts, tries = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(10000) });
+      if (r.ok) return r.json();
+      if (r.status !== 429 && r.status < 500) throw Object.assign(new Error(`${new URL(url).host} returned ${r.status}`), { fatal: true });
+      if (attempt >= tries) throw new Error(`${new URL(url).host} returned ${r.status}`);
+    } catch (e) {
+      if (e.fatal || attempt >= tries) throw e;
+    }
+    await sleep(1000 * attempt);
+  }
+}
+
+// Both run the Esplora API; fall back to the second when the first keeps failing.
+const ESPLORA = ['https://mempool.space/api', 'https://blockstream.info/api'];
+
+async function addressInfo(addr) {
+  let d;
+  try { d = await fetchJson(`${ESPLORA[0]}/address/${addr}`); }
+  catch { d = await fetchJson(`${ESPLORA[1]}/address/${addr}`); }
+  const c = d.chain_stats, m = d.mempool_stats;
+  return {
+    used: c.tx_count + m.tx_count > 0,
+    confirmed: c.funded_txo_sum - c.spent_txo_sum,
+    pending: m.funded_txo_sum - m.spent_txo_sum,
+  };
+}
+
+// Walk receive (0) and change (1) chains until GAP_LIMIT unused addresses in a row.
+async function scanBtc(acct, onProgress) {
+  const node = parseExtendedKey(acct.key);
+  let confirmed = 0, pending = 0, used = 0, checked = 0;
+  for (const chain of [0, 1]) {
+    const branch = node.deriveChild(chain);
+    let i = 0, gap = 0;
+    while (gap < GAP_LIMIT) {
+      const batch = Array.from({ length: 2 }, (_, k) => i + k);
+      const infos = await Promise.all(batch.map((n) => addressInfo(toAddress(branch.deriveChild(n).publicKey, acct.script))));
+      for (const info of infos) {
+        checked++;
+        if (info.used) { gap = 0; used++; confirmed += info.confirmed; pending += info.pending; }
+        else gap++;
+      }
+      i += batch.length;
+      onProgress(checked);
+      await sleep(150);
+    }
+  }
+  return { amount: (confirmed + pending) / 1e8, pending: pending / 1e8, detail: `${used} used addresses` };
+}
+
+// ---- Ethereum ----
+async function scanEth(acct) {
+  const d = await fetchJson('https://ethereum-rpc.publicnode.com', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBalance', params: [acct.key, 'latest'] }),
+  });
+  if (d.error) throw new Error(d.error.message);
+  const wei = BigInt(d.result);
+  return { amount: Number(wei / 10n ** 9n) / 1e9, pending: 0, detail: '' };
+}
+
+// ---- Prices ----
+async function loadPrices() {
+  state.prices = await fetchJson('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd,cny,eur,hkd');
+}
+
+// ---- UI ----
+const fiat = () => $('fiat').value;
+const fmtFiat = (v) => v.toLocaleString(undefined, { style: 'currency', currency: fiat().toUpperCase(), maximumFractionDigits: 2 });
+const priceOf = (coin) => state.prices?.[coin === 'btc' ? 'bitcoin' : 'ethereum']?.[fiat()];
+const short = (k) => k.length > 24 ? `${k.slice(0, 10)}…${k.slice(-8)}` : k;
+
+function render() {
+  const box = $('accounts');
+  box.replaceChildren();
+  let total = 0, totals = { btc: 0, eth: 0 }, complete = true;
+  state.accounts.forEach((a, idx) => {
+    const r = state.results[a.id];
+    const card = document.createElement('div');
+    card.className = 'card';
+    const price = priceOf(a.coin);
+    let right = '<span class="sub">—</span>';
+    if (r?.loading) right = `<span class="sub">Checking… ${r.progress || ''}</span>`;
+    else if (r?.error) right = `<span class="err">${r.error}</span>`;
+    else if (r) {
+      totals[a.coin] += r.amount;
+      if (price != null) total += r.amount * price;
+      right = `<b>${r.amount.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${a.coin.toUpperCase()}</b>
+        <span class="sub">${price != null ? fmtFiat(r.amount * price) : ''}</span>
+        ${r.pending ? `<span class="sub">incl. ${r.pending} pending</span>` : ''}`;
+    }
+    if (!r || r.loading || r.error) complete = false;
+    card.innerHTML = `
+      <div class="row spread">
+        <div><span class="tag ${a.coin}">${a.coin.toUpperCase()}</span> <span class="acct-name"></span></div>
+        <div class="amt">${right}</div>
+      </div>
+      <div class="row spread" style="margin-top:6px">
+        <span class="mono">${short(a.key)}${r?.detail ? ' · ' + r.detail : ''}</span>
+        <button class="link" data-del="${idx}">Remove</button>
+      </div>`;
+    card.querySelector('.acct-name').textContent = a.name;
+    box.append(card);
+  });
+  $('total').textContent = state.prices && state.accounts.length ? fmtFiat(total) : '—';
+  $('totalSub').textContent = state.accounts.length
+    ? `${totals.btc.toLocaleString(undefined, { maximumFractionDigits: 8 })} BTC · ${totals.eth.toLocaleString(undefined, { maximumFractionDigits: 6 })} ETH${complete ? '' : ' (incomplete)'}`
+    : 'Add your first account below.';
+  $('addBox').open = state.accounts.length === 0 || $('addBox').open;
+}
+
+let refreshing = false, refreshAgain = false;
+
+async function refresh() {
+  if (refreshing) { refreshAgain = true; return; }
+  if (!state.accounts.length) return render();
+  refreshing = true;
+  $('refresh').disabled = true;
+  $('status').textContent = 'Updating…';
+  const pricePromise = loadPrices().catch((e) => { $('status').textContent = `Price error: ${e.message}`; });
+  // Accounts run one at a time to stay under mempool.space rate limits.
+  for (const a of state.accounts) {
+    state.results[a.id] = { loading: true };
+    render();
+    try {
+      state.results[a.id] = a.coin === 'btc'
+        ? await scanBtc(a, (n) => { state.results[a.id].progress = `${n} addresses`; render(); })
+        : await scanEth(a);
+    } catch (e) {
+      state.results[a.id] = { error: e.message };
+    }
+    render();
+  }
+  await pricePromise;
+  render();
+  if (!$('status').textContent.startsWith('Price error')) $('status').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  $('refresh').disabled = false;
+  refreshing = false;
+  if (refreshAgain) { refreshAgain = false; refresh(); }
+}
+
+function addAccount() {
+  const coin = $('kind').value;
+  const key = $('key').value.trim();
+  const name = $('name').value.trim() || (coin === 'btc' ? 'Bitcoin' : 'Ethereum');
+  $('addErr').textContent = '';
+  try {
+    if (/\s/.test(key) && key.split(/\s+/).length >= 12) throw new Error('That looks like a recovery phrase. Do not enter it anywhere. Use the xpub instead.');
+    if (coin === 'btc') {
+      parseExtendedKey(key);
+    } else if (!/^0x[0-9a-fA-F]{40}$/.test(key)) {
+      throw new Error('Enter an Ethereum address starting with 0x (42 characters)');
+    }
+  } catch (e) {
+    $('addErr').textContent = e.message;
+    return;
+  }
+  let script = $('script').value;
+  if (key.startsWith('zpub')) script = 'p2wpkh';
+  if (key.startsWith('ypub')) script = 'p2sh-p2wpkh';
+  state.accounts.push({ id: crypto.randomUUID(), coin, name, key, script: coin === 'btc' ? script : undefined });
+  save();
+  $('key').value = ''; $('name').value = '';
+  $('addBox').open = false;
+  refresh();
+}
+
+$('kind').addEventListener('change', () => {
+  const btc = $('kind').value === 'btc';
+  $('btcOpts').hidden = !btc;
+  $('keyLabel').textContent = btc ? 'Extended public key' : 'Ethereum address';
+});
+$('add').addEventListener('click', addAccount);
+$('refresh').addEventListener('click', refresh);
+$('fiat').addEventListener('change', () => {
+  try { localStorage.setItem(STORE + '-fiat', fiat()); } catch {}
+  render();
+});
+$('accounts').addEventListener('click', (e) => {
+  const idx = e.target.dataset?.del;
+  if (idx == null) return;
+  if (!confirm(`Remove "${state.accounts[idx].name}"?`)) return;
+  state.accounts.splice(Number(idx), 1);
+  save();
+  render();
+});
+try { $('fiat').value = localStorage.getItem(STORE + '-fiat') || 'usd'; } catch {}
+
+render();
+refresh();
+</script>
+</body>
+</html>
