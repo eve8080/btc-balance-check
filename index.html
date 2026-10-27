@@ -22,6 +22,12 @@
     --line: #2c2c31; --accent: #f5a13a; --eth: #8c9bff; --danger: #ef6b5b; --ok: #5cc98a;
   }
   * { box-sizing: border-box; }
+  /* Replace Safari's own pull-to-reload with ours, which also works from the Home Screen. */
+  html, body { overscroll-behavior-y: none; }
+  #ptr {
+    height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px; transition: height .2s;
+  }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -58,6 +64,7 @@
 </head>
 <body>
 <main>
+  <div id="ptr" aria-hidden="true"></div>
   <h1>TOTAL</h1>
   <p class="total" id="total">—</p>
   <div class="sub" id="totalSub"></div>
@@ -386,6 +393,33 @@ $('accounts').addEventListener('click', (e) => {
   render();
 });
 try { $('fiat').value = localStorage.getItem(STORE + '-fiat') || 'usd'; } catch {}
+
+// Pull to refresh: drag down from the top of the page past PULL_TRIGGER px.
+const PULL_TRIGGER = 120;
+let pullStart = null, pulled = 0;
+const ptr = $('ptr');
+window.addEventListener('touchstart', (e) => {
+  const fromField = e.target.closest?.('input, textarea, select');
+  pullStart = window.scrollY <= 0 && !refreshing && !fromField ? e.touches[0].clientY : null;
+  pulled = 0;
+}, { passive: true });
+window.addEventListener('touchmove', (e) => {
+  if (pullStart == null) return;
+  if (window.scrollY > 0) { pullStart = null; ptr.style.height = '0'; return; }
+  pulled = Math.max(0, e.touches[0].clientY - pullStart);
+  ptr.style.transition = 'none';
+  ptr.style.height = `${Math.min(pulled / 2, 60)}px`;
+  ptr.textContent = pulled >= PULL_TRIGGER ? '↻ Release to refresh' : '↓ Pull to refresh';
+}, { passive: true });
+window.addEventListener('touchend', () => {
+  if (pullStart == null) return;
+  pullStart = null;
+  ptr.style.transition = '';
+  if (pulled < PULL_TRIGGER) { ptr.style.height = '0'; return; }
+  ptr.style.height = '40px';
+  ptr.textContent = 'Updating…';
+  refresh().finally(() => { ptr.style.height = '0'; });
+});
 
 render();
 if (cache.at) $('status').textContent = `Last updated ${new Date(cache.at).toLocaleString()}`;
