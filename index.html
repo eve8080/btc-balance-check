@@ -97,7 +97,7 @@
   </details>
 
   <p class="note">
-    Accounts are saved only in this browser. Balances come from mempool.space or blockstream.info (BTC) and
+    Accounts are saved only in this browser. Balances come from blockchain.info, with mempool.space or blockstream.info as backup (BTC), and
     publicnode.com (ETH); prices from CoinGecko. Those services see the addresses being looked up.
     ETH tokens (USDT etc.) are not counted yet.
   </p>
@@ -112,16 +112,27 @@ import { ripemd160 } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.4.0/ripe
 const b58c = createBase58check(sha256);
 const STORE = 'wallet-balance-v1';
 const GAP_LIMIT = 20;
+const BATCH = 40;
 const VERSIONS = { xpub: 0x0488b21e, ypub: 0x049d7cb2, zpub: 0x04b24746 };
 
 const $ = (id) => document.getElementById(id);
-const state = { accounts: load(), prices: null, results: {} };
+const cache = loadCache();
+const state = { accounts: load(), prices: cache.prices || null, results: cache.results || {} };
 
 function load() {
   try { return JSON.parse(localStorage.getItem(STORE)) || []; } catch { return []; }
 }
 function save() {
   try { localStorage.setItem(STORE, JSON.stringify(state.accounts)); } catch {}
+}
+// Last balances and prices, so the page shows something instantly while refreshing.
+function loadCache() {
+  try { return JSON.parse(localStorage.getItem(STORE + '-cache')) || {}; } catch { return {}; }
+}
+function saveCache() {
+  const results = {};
+  for (const [id, r] of Object.entries(state.results)) if (r && !r.loading && !r.error) results[id] = { ...r, stale: undefined };
+  try { localStorage.setItem(STORE + '-cache', JSON.stringify({ results, prices: state.prices, at: Date.now() })); } catch {}
 }
 
 // ---- Bitcoin ----
@@ -166,13 +177,16 @@ async function fetchJson(url, opts, tries = 3) {
   }
 }
 
-// Both run the Esplora API; fall back to the second when the first keeps failing.
+// Both run the Esplora API. Alternate between them to halve the load on each (both rate-limit),
+// and try the other one when a request fails.
 const ESPLORA = ['https://mempool.space/api', 'https://blockstream.info/api'];
+let esploraTurn = 0;
 
 async function addressInfo(addr) {
+  const first = esploraTurn++ % 2;
   let d;
-  try { d = await fetchJson(`${ESPLORA[0]}/address/${addr}`); }
-  catch { d = await fetchJson(`${ESPLORA[1]}/address/${addr}`); }
+  try { d = await fetchJson(`${ESPLORA[first]}/address/${addr}`, {}, 1); }
+  catch { d = await fetchJson(`${ESPLORA[1 - first]}/address/${addr}`); }
   const c = d.chain_stats, m = d.mempool_stats;
   return {
     used: c.tx_count + m.tx_count > 0,
@@ -181,27 +195,53 @@ async function addressInfo(addr) {
   };
 }
 
-// Walk receive (0) and change (1) chains until GAP_LIMIT unused addresses in a row.
-async function scanBtc(acct, onProgress) {
+// One blockchain.info request covers many addresses.
+async function lookupMany(addrs) {
+  const d = await fetchJson(`https://blockchain.info/balance?active=${addrs.join('|')}&cors=true`, {}, 2);
+  return addrs.map((a) => ({ used: d[a].n_tx > 0, confirmed: d[a].final_balance, pending: 0 }));
+}
+
+async function scanBtc(acct) {
   const node = parseExtendedKey(acct.key);
-  let confirmed = 0, pending = 0, used = 0, checked = 0;
+  try { return await scanBtcBatched(acct, node); }
+  catch { return await scanBtcEsplora(acct, node); }
+}
+
+// Walk receive (0) and change (1) chains together until each has GAP_LIMIT unused addresses in a row.
+async function scanBtcBatched(acct, node) {
+  const chains = [0, 1].map((c) => ({ branch: node.deriveChild(c), next: 0, gap: 0 }));
+  let confirmed = 0, pending = 0, used = 0;
+  while (chains.some((c) => c.gap < GAP_LIMIT)) {
+    const todo = chains.filter((c) => c.gap < GAP_LIMIT).flatMap((c) =>
+      Array.from({ length: BATCH }, () => ({ c, addr: toAddress(c.branch.deriveChild(c.next++).publicKey, acct.script) })));
+    const infos = await lookupMany(todo.map((t) => t.addr));
+    todo.forEach(({ c }, k) => {
+      const info = infos[k];
+      if (info.used) { c.gap = 0; used++; confirmed += info.confirmed; pending += info.pending; }
+      else c.gap++;
+    });
+  }
+  return { amount: (confirmed + pending) / 1e8, pending: pending / 1e8, detail: `${used} used addresses` };
+}
+
+// Fallback: one Esplora request per address, two at a time, stopping each chain at the gap limit.
+async function scanBtcEsplora(acct, node) {
+  let confirmed = 0, pending = 0, used = 0;
   for (const chain of [0, 1]) {
     const branch = node.deriveChild(chain);
     let i = 0, gap = 0;
     while (gap < GAP_LIMIT) {
-      const batch = Array.from({ length: 2 }, (_, k) => i + k);
+      const batch = [i, i + 1];
       const infos = await Promise.all(batch.map((n) => addressInfo(toAddress(branch.deriveChild(n).publicKey, acct.script))));
       for (const info of infos) {
-        checked++;
         if (info.used) { gap = 0; used++; confirmed += info.confirmed; pending += info.pending; }
         else gap++;
       }
       i += batch.length;
-      onProgress(checked);
       await sleep(150);
     }
   }
-  return { amount: (confirmed + pending) / 1e8, pending: pending / 1e8, detail: `${used} used addresses` };
+  return { amount: (confirmed + pending) / 1e8, pending: pending / 1e8, detail: `${used} used addresses (slow mode)` };
 }
 
 // ---- Ethereum ----
@@ -243,7 +283,8 @@ function render() {
       if (price != null) total += r.amount * price;
       right = `<b>${r.amount.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${a.coin.toUpperCase()}</b>
         <span class="sub">${price != null ? fmtFiat(r.amount * price) : ''}</span>
-        ${r.pending ? `<span class="sub">incl. ${r.pending} pending</span>` : ''}`;
+        ${r.pending ? `<span class="sub">incl. ${r.pending} pending</span>` : ''}
+        ${r.stale ? `<span class="err">Not updated: ${r.stale}</span>` : ''}`;
     }
     if (!r || r.loading || r.error) complete = false;
     card.innerHTML = `
@@ -273,21 +314,25 @@ async function refresh() {
   refreshing = true;
   $('refresh').disabled = true;
   $('status').textContent = 'Updating…';
-  const pricePromise = loadPrices().catch((e) => { $('status').textContent = `Price error: ${e.message}`; });
-  // Accounts run one at a time to stay under mempool.space rate limits.
-  for (const a of state.accounts) {
-    state.results[a.id] = { loading: true };
-    render();
-    try {
-      state.results[a.id] = a.coin === 'btc'
-        ? await scanBtc(a, (n) => { state.results[a.id].progress = `${n} addresses`; render(); })
-        : await scanEth(a);
-    } catch (e) {
-      state.results[a.id] = { error: e.message };
-    }
-    render();
-  }
-  await pricePromise;
+  render();
+  let priceErr = null;
+  await Promise.all([
+    loadPrices().catch((e) => { priceErr = e; }),
+    ...state.accounts.map(async (a) => {
+      const prev = state.results[a.id];
+      const hadValue = prev && !prev.loading && !prev.error;
+      if (!hadValue) { state.results[a.id] = { loading: true }; render(); }
+      try {
+        state.results[a.id] = a.coin === 'btc' ? await scanBtc(a) : await scanEth(a);
+      } catch (e) {
+        // Keep showing the last good balance rather than replacing it with an error.
+        state.results[a.id] = hadValue ? { ...prev, stale: e.message } : { error: e.message };
+      }
+      render();
+    }),
+  ]);
+  if (priceErr) $('status').textContent = `Price error: ${priceErr.message}`;
+  saveCache();
   render();
   if (!$('status').textContent.startsWith('Price error')) $('status').textContent = `Updated ${new Date().toLocaleTimeString()}`;
   $('refresh').disabled = false;
@@ -343,6 +388,7 @@ $('accounts').addEventListener('click', (e) => {
 try { $('fiat').value = localStorage.getItem(STORE + '-fiat') || 'usd'; } catch {}
 
 render();
+if (cache.at) $('status').textContent = `Last updated ${new Date(cache.at).toLocaleString()}`;
 refresh();
 </script>
 </body>

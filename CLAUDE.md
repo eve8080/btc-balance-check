@@ -16,10 +16,10 @@ No build step. Run locally: `python3 -m http.server 8765`, then open http://loca
 
 Single static page, `index.html`, built for iPhone Safari. Libraries load as ES modules from cdn.jsdelivr.net (@scure/bip32, @scure/base, @noble/hashes), pinned to exact versions.
 
-- BTC: an xpub/ypub/zpub is normalised to xpub version bytes, then receive (0) and change (1) addresses are derived until 20 unused in a row (gap limit). Ledger shows native segwit keys as `xpub`, so the address type is a separate per-account setting. Balances come from the Esplora API: mempool.space, with blockstream.info as fallback. Rate-limit replies lack CORS headers, so network errors are retried.
+- BTC: an xpub/ypub/zpub is normalised to xpub version bytes, then receive (0) and change (1) addresses are derived until 20 unused in a row (gap limit). Ledger shows native segwit keys as `xpub`, so the address type is a separate per-account setting. Balances come from blockchain.info `/balance?active=a|b|…&cors=true`, 40 addresses per chain per request (both chains in one call). If that fails, the page falls back to per-address Esplora lookups, alternating mempool.space and blockstream.info. Both rate-limit after about 20 quick requests, and their rate-limit replies lack CORS headers, so network errors are retried.
 - ETH: `eth_getBalance` via ethereum-rpc.publicnode.com. Native ETH only, no tokens yet.
 - Prices: CoinGecko simple/price.
-- Accounts are saved in the browser's localStorage only.
+- Accounts are saved in the browser's localStorage only. The last balances and prices are cached there too (`wallet-balance-v1-cache`) so the page shows numbers instantly. All accounts refresh in parallel.
 
 ## Rules
 
