@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-btc-balance-check: a tool to check Bitcoin address balances. Started 2026-10-27; platform and features are still to be decided with the owner. Local git only, no GitHub remote yet. Commit only when the owner asks.
+btc-balance-check: a tool to check Bitcoin address balances. Started 2026-10-27. iPhone web page for BTC (xpub) and ETH balances, hosted on GitHub Pages from `main`: https://eve8080.github.io/btc-balance-check/ (public repo eve8080/btc-balance-check). Pushing to `main` deploys. Commit only when the owner asks.
 
 The owner often works from an iPhone through Remote Control: keep replies short and give clear next steps.
 
